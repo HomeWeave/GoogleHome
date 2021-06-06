@@ -1,0 +1,20 @@
+metadata {
+    name: "anton_google_home"
+    description: "Google Home Plugin for Anton"
+    remote_url: "https://github.com/HomeWeave/GoogleHome"
+}
+runtime {
+    runtime_type: PY3
+    py3_runtime_info {
+        main_service_class: "anton_google_home.service.AntonGoogleHomePlugin"
+        dependencies: "PyChromecast"
+    }
+    pipes {
+        pipe_id: "instructions"
+        pipe_type: IOT_INSTRUCTION
+    }
+    pipes {
+        pipe_id: "events"
+        pipe_type: IOT_EVENTS
+    }
+}
