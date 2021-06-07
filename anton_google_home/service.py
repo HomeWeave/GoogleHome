@@ -7,7 +7,7 @@ from pyantonlib.plugin import AntonPlugin
 from pyantonlib.channel import GenericInstructionController
 from pyantonlib.channel import GenericEventController
 from pyantonlib.utils import log_info
-from anton.plugin_pb2 import PipeType
+from anton.plugin_pb2 import PipeType, IOT_INSTRUCTION, IOT_EVENTS
 from anton.events_pb2 import GenericEvent
 from anton.device_pb2 import DEVICE_STATUS_ONLINE, DEVICE_KIND_STREAMING_STICK
 from anton.power_pb2 import POWER_OFF
@@ -34,9 +34,9 @@ class AntonGoogleHomePlugin(AntonPlugin):
         self.send_event = event_controller.create_client(0, self.on_response)
 
         registry = self.channel_registrar()
-        registry.register_controller(PipeType.IOT_INSTRUCTION,
+        registry.register_controller(IOT_INSTRUCTION,
                                      instruction_controller)
-        registry.register_controller(PipeType.IOT_EVENTS, event_controller)
+        registry.register_controller(IOT_EVENTS, event_controller)
 
     def on_start(self):
         self.discovery_thread = Thread(target=self.discover_chromecasts)
