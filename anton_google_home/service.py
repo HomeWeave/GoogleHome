@@ -14,6 +14,10 @@ from anton.power_pb2 import POWER_OFF
 from anton.media_pb2 import PLAYING, PAUSED, STOPPED
 
 
+def get_device_id(device):
+    return device.model_name + str(device.uuid)
+
+
 def online_event(device_id, friendly_name):
     event = GenericEvent(device_id=device_id)
     event.device.friendly_name = friendly_name
@@ -67,7 +71,7 @@ class ChromecastController(object):
         album_art = media.status.images and media.status.images[0].url
         play_state = media.status.player_state
 
-        event = media_event(str(self.device.uuid), player_id, player_name,
+        event = media_event(get_device_id(self.device), player_id, player_name,
                             track_name, artist, url, album_art, play_state)
         self.send_event(event)
 
@@ -100,12 +104,14 @@ class AntonGoogleHomePlugin(AntonPlugin):
                     continue
 
                 device.wait()
+
+                event = online_event(get_device_id(device),
+                                     device.device.friendly_name)
+                self.send_event(event)
+
                 controller = ChromecastController(device, self.send_event)
                 self.controllers[device_id] = controller
 
-                event = online_event(device.model_name + str(device.uuid),
-                                     device.device.friendly_name)
-                self.send_event(event)
 
     def on_stop(self):
         self.discovery_thread.join()
