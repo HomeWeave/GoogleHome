@@ -113,9 +113,21 @@ class ChromecastController(object):
                 return
 
             func()
+        elif oneof ==  'volume':
+            mapping = {
+                VOLUME_UP: self.device.volume_up,
+                VOLUME_DOWN: self.device.volume_down,
+                VOLUME_MUTE: lambda: self.device.set_volume_muted(True),
+                VOLUME_SET: lambda: self.device.set_volume(media.volume.level /
+                                                           100.0)
+            }
+            func = mapping.get(media.volume.type)
+            if not func:
+                log_warn("Bad volume command.")
+                return
+            func()
         else:
             log_warn("Instruction handler not implemented.")
-
 
 
 class AntonGoogleHomePlugin(AntonPlugin):
