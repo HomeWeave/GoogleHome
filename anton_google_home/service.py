@@ -6,7 +6,7 @@ import pychromecast
 from pyantonlib.plugin import AntonPlugin
 from pyantonlib.channel import GenericInstructionController
 from pyantonlib.channel import GenericEventController
-from pyantonlib.utils import log_info
+from pyantonlib.utils import log_info, log_warn
 from anton.plugin_pb2 import PipeType, IOT_INSTRUCTION, IOT_EVENTS
 from anton.events_pb2 import GenericEvent
 from anton.device_pb2 import DEVICE_STATUS_ONLINE, DEVICE_KIND_STREAMING_STICK
@@ -75,11 +75,31 @@ class ChromecastController(object):
                             track_name, artist, url, album_art, play_state)
         self.send_event(event)
 
+    def handle_media_instruction(self, instruction):
+        media = instruction.media
+        oneof = media.WhichOneof('Instruction')
+
+        if oneof == 'play_state_instruction':
+            mapping = {
+                PLAYING: self.device.media_controller.play,
+                PAUSED: self.device.media_controller.pause
+            }
+            func = mapping.get(media.play_state_instruction)
+            if not func:
+                log_warn("Bad target play state.")
+                return
+
+            func()
+        else:
+            log_warn("Instruction handler not implemented.")
+
 
 
 class AntonGoogleHomePlugin(AntonPlugin):
     def setup(self, plugin_startup_info):
-        instruction_controller = GenericInstructionController({})
+        instruction_controller = GenericInstructionController({
+            "media": self.handle_media_instruction
+        })
         event_controller = GenericEventController(lambda call_status: 0)
         self.send_event = event_controller.create_client(0, self.on_response)
 
@@ -99,18 +119,27 @@ class AntonGoogleHomePlugin(AntonPlugin):
             browser.stop_discovery()
 
             for device in devices:
-                device_id = str(device.uuid)
+                device_id = get_device_id(device)
                 if device_id in self.controllers:
                     continue
 
                 device.wait()
 
-                event = online_event(get_device_id(device),
-                                     device.device.friendly_name)
+                event = online_event(device_id, device.device.friendly_name)
                 self.send_event(event)
 
                 controller = ChromecastController(device, self.send_event)
                 self.controllers[device_id] = controller
+
+    def handle_media_instruction(self, instruction):
+        device_id = instruction.device_id
+        controller = self.controllers.get(device_id)
+
+        if not controller:
+            log_warn("No controller found for device ID: " + device_id)
+            return
+
+        controller.handle_media_instruction(instruction)
 
 
     def on_stop(self):
