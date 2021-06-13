@@ -2,6 +2,8 @@ import os
 from threading import Thread, Event
 
 import pychromecast
+from pychromecast.const import CAST_TYPE_CHROMECAST, CAST_TYPE_AUDIO
+from pychromecast.const import CAST_TYPE_GROUP
 
 from pyantonlib.plugin import AntonPlugin
 from pyantonlib.channel import GenericInstructionController
@@ -10,23 +12,30 @@ from pyantonlib.utils import log_info, log_warn
 from anton.plugin_pb2 import PipeType, IOT_INSTRUCTION, IOT_EVENTS
 from anton.events_pb2 import GenericEvent
 from anton.device_pb2 import DEVICE_STATUS_ONLINE, DEVICE_KIND_STREAMING_STICK
-from anton.power_pb2 import POWER_OFF
+from anton.device_pb2 import DEVICE_KIND_SMART_SPEAKER, DEVICE_KIND_AUDIO_GROUP
+from anton.power_pb2 import POWER_OFF, POWER_ON
 from anton.media_pb2 import PLAYING, PAUSED, STOPPED
+from anton.media_pb2 import VOLUME_UP, VOLUME_DOWN, VOLUME_SET, VOLUME_MUTE
 
 
 def get_device_id(device):
     return device.model_name + str(device.uuid)
 
 
-def online_event(device_id, friendly_name):
+def online_event(device_id, friendly_name, device_kind):
     event = GenericEvent(device_id=device_id)
     event.device.friendly_name = friendly_name
-    event.device.device_kind = DEVICE_KIND_STREAMING_STICK
+    event.device.device_kind = device_kind
     event.device.device_status = DEVICE_STATUS_ONLINE
 
+
     capabilities = event.device.capabilities
-    capabilities.power_state.supported_power_states[:] = [POWER_OFF]
+    capabilities.media.volume_controls[:] = [VOLUME_UP, VOLUME_DOWN,
+                                             VOLUME_MUTE, VOLUME_SET]
     capabilities.media.url_patterns[:] = []
+    if device_kind == DEVICE_KIND_STREAMING_STICK:
+        capabilities.power_state.supported_power_states[:] = [
+                POWER_OFF, POWER_ON]
 
     return event
 
@@ -58,7 +67,21 @@ class ChromecastController(object):
     def __init__(self, device, send_event):
         self.device = device
         self.send_event = send_event
+
+        self.device_kind = {
+            CAST_TYPE_CHROMECAST: DEVICE_KIND_STREAMING_STICK,
+            CAST_TYPE_AUDIO: DEVICE_KIND_SMART_SPEAKER,
+            CAST_TYPE_GROUP: DEVICE_KIND_AUDIO_GROUP,
+        }.get(device.device.cast_type)
+
+        if not self.device_kind:
+            return
+
         self.device.media_controller.register_status_listener(self)
+
+        event = online_event(get_device_id(device), device.device.friendly_name,
+                             self.device_kind)
+        self.send_event(event)
 
     def new_media_status(self, status):
         media = self.device.media_controller
@@ -124,9 +147,6 @@ class AntonGoogleHomePlugin(AntonPlugin):
                     continue
 
                 device.wait()
-
-                event = online_event(device_id, device.device.friendly_name)
-                self.send_event(event)
 
                 controller = ChromecastController(device, self.send_event)
                 self.controllers[device_id] = controller
