@@ -13,7 +13,6 @@ from anton.plugin_pb2 import PipeType, IOT_INSTRUCTION, IOT_EVENTS
 from anton.events_pb2 import GenericEvent
 from anton.device_pb2 import DEVICE_STATUS_ONLINE, DEVICE_KIND_STREAMING_STICK
 from anton.device_pb2 import DEVICE_KIND_SMART_SPEAKER, DEVICE_KIND_AUDIO_GROUP
-from anton.power_pb2 import POWER_OFF, POWER_ON
 from anton.media_pb2 import PLAYING, PAUSED, STOPPED
 from anton.media_pb2 import VOLUME_UP, VOLUME_DOWN, VOLUME_SET, VOLUME_MUTE
 
