@@ -33,9 +33,6 @@ def online_event(device_id, friendly_name, device_kind):
     capabilities.media.volume_controls[:] = [VOLUME_UP, VOLUME_DOWN,
                                              VOLUME_MUTE, VOLUME_SET]
     capabilities.media.url_patterns[:] = []
-    if device_kind == DEVICE_KIND_STREAMING_STICK:
-        capabilities.power_state.supported_power_states[:] = [
-                POWER_OFF, POWER_ON]
 
     return event
 
