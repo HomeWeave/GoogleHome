@@ -1,39 +1,33 @@
 import os
 from threading import Thread, Event
+from uuid import UUID
 
+import zeroconf
 import pychromecast
 from pychromecast.const import CAST_TYPE_CHROMECAST, CAST_TYPE_AUDIO
 from pychromecast.const import CAST_TYPE_GROUP
 
 from pyantonlib.plugin import AntonPlugin
-from pyantonlib.channel import GenericInstructionController
-from pyantonlib.channel import GenericEventController
+from pyantonlib.channel import AppHandlerBase, DeviceHandlerBase
+from pyantonlib.channel import DefaultProtoChannel
 from pyantonlib.utils import log_info, log_warn
-from anton.plugin_pb2 import PipeType, IOT_INSTRUCTION, IOT_EVENTS
-from anton.events_pb2 import GenericEvent
+from anton.plugin_pb2 import PipeType
 from anton.device_pb2 import DEVICE_STATUS_ONLINE, DEVICE_KIND_STREAMING_STICK
+from anton.device_pb2 import DEVICE_STATUS_OFFLINE
 from anton.device_pb2 import DEVICE_KIND_SMART_SPEAKER, DEVICE_KIND_AUDIO_GROUP
 from anton.media_pb2 import PLAYING, PAUSED, STOPPED
-from anton.media_pb2 import VOLUME_UP, VOLUME_DOWN, VOLUME_SET, VOLUME_MUTE
+from anton.media_pb2 import VOLUME_UP, VOLUME_DOWN, VOLUME_MUTE
+from anton.state_pb2 import DeviceState
 
 
-def get_device_id(device):
-    return device.model_name + str(device.uuid)
+class Channel(DefaultProtoChannel):
+    pass
 
 
-def online_event(device_id, friendly_name, device_kind):
-    event = GenericEvent(device_id=device_id)
-    event.device.friendly_name = friendly_name
-    event.device.device_kind = device_kind
-    event.device.device_status = DEVICE_STATUS_ONLINE
-
-
-    capabilities = event.device.capabilities
-    capabilities.media.volume_controls[:] = [VOLUME_UP, VOLUME_DOWN,
-                                             VOLUME_MUTE, VOLUME_SET]
-    capabilities.media.url_patterns[:] = []
-
-    return event
+def get_device_id(obj):
+    if isinstance(obj, UUID):
+        return str(obj)
+    return str(obj.uuid)
 
 
 def media_event(device_id, player_id, player_name, track_name, artist, url,
@@ -59,25 +53,76 @@ def media_event(device_id, player_id, player_name, track_name, artist, url,
     return event
 
 
-class ChromecastController(object):
-    def __init__(self, device, send_event):
+class ChromecastController(pychromecast.CastStatusListener):
+
+    def __init__(self, device, device_handler):
         self.device = device
-        self.send_event = send_event
+        self.device_id = get_device_id(device)
+        self.device_handler = device_handler
 
         self.device_kind = {
             CAST_TYPE_CHROMECAST: DEVICE_KIND_STREAMING_STICK,
             CAST_TYPE_AUDIO: DEVICE_KIND_SMART_SPEAKER,
             CAST_TYPE_GROUP: DEVICE_KIND_AUDIO_GROUP,
-        }.get(device.device.cast_type)
+        }.get(device.cast_type)
 
-        if not self.device_kind:
+        self.latest_status = None
+
+    def start(self):
+        if self.device_kind not in (DEVICE_KIND_STREAMING_STICK,
+                                    DEVICE_KIND_SMART_SPEAKER):
             return
 
-        self.device.media_controller.register_status_listener(self)
+        try:
+            self.device.wait(timeout=2.0)
+        except:
+            log_warn("Unable to talk to Cast device: " + self.device.name)
+            return
 
-        event = online_event(get_device_id(device), device.device.friendly_name,
-                             self.device_kind)
-        self.send_event(event)
+        self.device.register_status_listener(self)
+
+        state = DeviceState(device_id=self.device_id,
+                            friendly_name=self.device.name,
+                            device_status=DEVICE_STATUS_ONLINE,
+                            kind=self.device_kind)
+
+        self.latest_status = self.device.status
+
+        state.volume_state = int(self.device.status.volume_level * 100)
+
+        capabilities = state.capabilities
+        capabilities.media.volume_controls[:] = [
+            VOLUME_UP, VOLUME_DOWN, VOLUME_MUTE
+        ]
+        capabilities.media.supported_states[:] = [PLAYING, PAUSED, STOPPED]
+        capabilities.media.url_patterns[:] = []
+
+        self.device_handler.send_device_state_updated(state)
+
+    def stop(self):
+        try:
+            self.device.disconnect(timeout=2.0)
+        except:
+            pass
+
+        if self.device_kind not in (CAST_TYPE_CHROMECAST, CAST_TYPE_AUDIO):
+            return
+
+        state = DeviceState(device_id=self.device_id,
+                            device_status=DEVICE_STATUS_OFFLINE)
+        self.device_handler.send_device_state_updated(state)
+
+    def new_cast_status(self, status):
+        log_info("New cast status: ", status)
+        if self.latest_status.volume_level != status.volume_level:
+            self.handle_volume_change(status)
+
+        self.latest_status = status
+
+    def handle_volume_change(self, status):
+        state = DeviceState(device_id=self.device_id)
+        state.volume_state = int(status.volume_level * 100)
+        self.device_handler.send_device_state_updated(state)
 
     def new_media_status(self, status):
         media = self.device.media_controller
@@ -125,55 +170,67 @@ class ChromecastController(object):
         else:
             log_warn("Instruction handler not implemented.")
 
+    def handle_set_device_state(self, msg, responder):
+        if msg.volume_state > 0:
+            self.device.set_volume(msg.volume_state / 100.0)
 
-class AntonGoogleHomePlugin(AntonPlugin):
-    def setup(self, plugin_startup_info):
-        instruction_controller = GenericInstructionController({
-            "media": self.handle_media_instruction
-        })
-        event_controller = GenericEventController(lambda call_status: 0)
-        self.send_event = event_controller.create_client(0, self.on_response)
 
-        registry = self.channel_registrar()
-        registry.register_controller(IOT_INSTRUCTION, instruction_controller)
-        registry.register_controller(IOT_EVENTS, event_controller)
+class CastDevicesController(DeviceHandlerBase):
 
-        self.controllers = {}
+    def __init__(self):
+        super().__init__()
+        self.devices = {}
 
-    def on_start(self):
-        self.discovery_thread = Thread(target=self.discover_chromecasts)
-        self.discovery_thread.start()
+        self.zconf = zeroconf.Zeroconf()
+        self.browser = pychromecast.CastBrowser(
+            pychromecast.SimpleCastListener(self.on_cast_added,
+                                            self.on_cast_removed), self.zconf)
 
-    def discover_chromecasts(self):
-        while True:
-            devices, browser = pychromecast.get_chromecasts()
-            browser.stop_discovery()
+    def start(self):
+        log_info("Discovering Cast devices..")
+        self.browser.start_discovery()
 
-            for device in devices:
-                device_id = get_device_id(device)
-                if device_id in self.controllers:
-                    continue
+    def stop(self):
+        self.browser.stop_discovery()
 
-                device.wait()
+    def on_cast_added(self, uuid, service):
+        cast_info = self.browser.devices[uuid]
+        device = pychromecast.get_chromecast_from_cast_info(
+            cast_info, self.zconf)
+        log_info("Found a cast device:", device)
+        controller = ChromecastController(device, self)
+        self.devices[get_device_id(device)] = controller
+        controller.start()
 
-                controller = ChromecastController(device, self.send_event)
-                self.controllers[device_id] = controller
-
-    def handle_media_instruction(self, instruction):
-        device_id = instruction.device_id
-        controller = self.controllers.get(device_id)
-
+    def on_cast_removed(self, uuid, service, cast_info):
+        controller = self.devices.pop(get_device_id(uuid))
         if not controller:
-            log_warn("No controller found for device ID: " + device_id)
             return
 
-        controller.handle_media_instruction(instruction)
+        controller.stop()
 
+    def handle_set_device_state(self, msg, responder):
+        log_info("Handling set_device_state: " + str(msg))
+
+        device_controller = self.devices.get(msg.device_id)
+        if device_controller is None:
+            raise ResourceNotFound(msg.device_id)
+        device_controller.handle_set_device_state(msg, responder)
+
+
+class AntonGoogleHomePlugin(AntonPlugin):
+
+    def setup(self, plugin_startup_info):
+        self.devices_handler = CastDevicesController()
+        self.app_handler = AppHandlerBase(plugin_startup_info)
+
+        self.channel = Channel(self.devices_handler, self.app_handler)
+
+        registry = self.channel_registrar()
+        registry.register_controller(PipeType.DEFAULT, self.channel)
+
+    def on_start(self):
+        self.devices_handler.start()
 
     def on_stop(self):
-        self.discovery_thread.join()
-
-
-    def on_response(self, call_status):
-        print("Received response:", call_status)
-
+        self.devices_handler.stop()
