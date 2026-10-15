@@ -30,27 +30,28 @@ def get_device_id(obj):
     return str(obj.uuid)
 
 
-def media_event(device_id, player_id, player_name, track_name, artist, url,
-                album_art, play_state):
-    event = GenericEvent(device_id=device_id)
+def media_state_update(device_id, player_id, player_name, track_name, artist, url,
+                       album_art_url, play_state):
+    state = DeviceState(device_id=device_id)
+    media_entry = state.media_state.add()
     if player_id:
-        event.media.media.player_id = player_id
+        media_entry.player_id = player_id
     if player_name:
-        event.media.media.player_name = player_name
+        media_entry.player_name = player_name
     if track_name:
-        event.media.media.track_name = track_name
+        media_entry.track_name = track_name
     if artist:
-        event.media.media.artist = artist
+        media_entry.artist = artist
     if url:
-        event.media.media.url = url
-    if album_art:
-        event.media.media.album_art = album_art
+        media_entry.url = url
+    if album_art_url:
+        media_entry.album_art.url = album_art_url
 
     mapping = {"PLAYING": PLAYING, "PAUSED": PAUSED}
     play_status = mapping.get(play_state, STOPPED)
-    event.media.media.play_status = play_status
+    media_entry.play_status = play_status
 
-    return event
+    return state
 
 
 class ChromecastController(pychromecast.CastStatusListener):
@@ -128,16 +129,20 @@ class ChromecastController(pychromecast.CastStatusListener):
         media = self.device.media_controller
 
         player_id = str(self.device.uuid)
-        player_name = str(self.device.device.friendly_name)
+        player_name = (
+            str(self.device.device.friendly_name)
+            if hasattr(self.device, "device") and hasattr(self.device.device, "friendly_name")
+            else str(self.device.name)
+        )
         track_name = media.status.title
         artist = media.status.artist
-        url = "(no URL)"
-        album_art = media.status.images and media.status.images[0].url
+        url = media.status.content_id or ""
+        album_art_url = media.status.images[0].url if media.status.images else None
         play_state = media.status.player_state
 
-        event = media_event(get_device_id(self.device), player_id, player_name,
-                            track_name, artist, url, album_art, play_state)
-        self.send_event(event)
+        state = media_state_update(self.device_id, player_id, player_name,
+                                   track_name, artist, url, album_art_url, play_state)
+        self.device_handler.send_device_state_updated(state)
 
     def handle_media_instruction(self, media_instruction):
         mapping = {
