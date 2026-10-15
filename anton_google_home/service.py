@@ -1,5 +1,3 @@
-import os
-from threading import Thread, Event
 from uuid import UUID
 
 import zeroconf
@@ -11,6 +9,7 @@ from pyantonlib.plugin import AntonPlugin
 from pyantonlib.channel import AppHandlerBase, DeviceHandlerBase
 from pyantonlib.channel import DefaultProtoChannel
 from pyantonlib.utils import log_info, log_warn
+from pyantonlib.exceptions import ResourceNotFound
 from anton.plugin_pb2 import PipeType
 from anton.device_pb2 import DEVICE_STATUS_ONLINE, DEVICE_KIND_STREAMING_STICK
 from anton.device_pb2 import DEVICE_STATUS_OFFLINE
@@ -240,6 +239,7 @@ class CastDevicesController(DeviceHandlerBase):
 
         device_controller = self.devices.get(msg.device_id)
         if device_controller is None:
+            log_warn("Device not found: " + str(msg.device_id))
             raise ResourceNotFound(msg.device_id)
         device_controller.handle_set_device_state(msg, responder)
 
