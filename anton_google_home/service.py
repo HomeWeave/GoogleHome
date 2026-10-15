@@ -30,8 +30,8 @@ def get_device_id(obj):
     return str(obj.uuid)
 
 
-def media_state_update(device_id, player_id, player_name, track_name, artist, url,
-                       album_art_url, play_state):
+def media_state_update(device_id, player_id, player_name, track_name, artist,
+                       url, album_art_url, play_state):
     state = DeviceState(device_id=device_id)
     media_entry = state.media_state.add()
     if player_id:
@@ -81,6 +81,7 @@ class ChromecastController(pychromecast.CastStatusListener):
             return
 
         self.device.register_status_listener(self)
+        self.device.media_controller.register_status_listener(self)
 
         state = DeviceState(device_id=self.device_id,
                             friendly_name=self.device.name,
@@ -92,11 +93,15 @@ class ChromecastController(pychromecast.CastStatusListener):
         state.volume_state = int(self.device.status.volume_level * 100)
 
         capabilities = state.capabilities
-        capabilities.media.volume_controls[:] = [
-            VOLUME_UP, VOLUME_DOWN, VOLUME_MUTE
-        ]
-        capabilities.media.supported_states[:] = [PLAYING, PAUSED, STOPPED]
-        capabilities.media.url_patterns[:] = []
+        capabilities.media.supports_media = True
+        capabilities.media.supports_volume_set = True
+        capabilities.media.volume_controls.extend(
+            [VOLUME_UP, VOLUME_DOWN, VOLUME_MUTE])
+        player_cap = capabilities.media.player_capabilities.add()
+        player_cap.player_id = self.device_id
+        player_cap.supports_play_now = True
+        player_cap.supports_play_next = True
+        player_cap.supported_states.extend([PLAYING, PAUSED, STOPPED])
 
         self.device_handler.send_device_state_updated(state)
 
@@ -106,7 +111,8 @@ class ChromecastController(pychromecast.CastStatusListener):
         except:
             pass
 
-        if self.device_kind not in (CAST_TYPE_CHROMECAST, CAST_TYPE_AUDIO):
+        if self.device_kind not in (DEVICE_KIND_STREAMING_STICK,
+                                    DEVICE_KIND_SMART_SPEAKER):
             return
 
         state = DeviceState(device_id=self.device_id,
@@ -129,19 +135,20 @@ class ChromecastController(pychromecast.CastStatusListener):
         media = self.device.media_controller
 
         player_id = str(self.device.uuid)
-        player_name = (
-            str(self.device.device.friendly_name)
-            if hasattr(self.device, "device") and hasattr(self.device.device, "friendly_name")
-            else str(self.device.name)
-        )
+        player_name = (str(self.device.device.friendly_name)
+                       if hasattr(self.device, "device")
+                       and hasattr(self.device.device, "friendly_name") else
+                       str(self.device.name))
         track_name = media.status.title
         artist = media.status.artist
         url = media.status.content_id or ""
-        album_art_url = media.status.images[0].url if media.status.images else None
+        album_art_url = media.status.images[
+            0].url if media.status.images else None
         play_state = media.status.player_state
 
         state = media_state_update(self.device_id, player_id, player_name,
-                                   track_name, artist, url, album_art_url, play_state)
+                                   track_name, artist, url, album_art_url,
+                                   play_state)
         self.device_handler.send_device_state_updated(state)
 
     def handle_media_instruction(self, media_instruction):
@@ -180,7 +187,8 @@ class ChromecastController(pychromecast.CastStatusListener):
             self.device.media_controller.play_media(
                 playlist_instruction.play_now, "audio/mp3")
         else:
-            log_warn("Playlist instruction type not supported: " + str(instruction_type))
+            log_warn("Playlist instruction type not supported: " +
+                     str(instruction_type))
 
     def handle_set_device_state(self, msg, responder):
         if msg.volume_state > 0:
