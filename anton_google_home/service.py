@@ -139,40 +139,53 @@ class ChromecastController(pychromecast.CastStatusListener):
                             track_name, artist, url, album_art, play_state)
         self.send_event(event)
 
-    def handle_media_instruction(self, instruction):
-        media = instruction.media
-        oneof = media.WhichOneof('Instruction')
+    def handle_media_instruction(self, media_instruction):
+        mapping = {
+            PLAYING: self.device.media_controller.play,
+            PAUSED: self.device.media_controller.pause,
+            STOPPED: self.device.media_controller.stop,
+        }
+        func = mapping.get(media_instruction.play_state_instruction)
+        if not func:
+            log_warn("Bad target play state.")
+            return
 
-        if oneof == 'play_state_instruction':
-            mapping = {
-                PLAYING: self.device.media_controller.play,
-                PAUSED: self.device.media_controller.pause
-            }
-            func = mapping.get(media.play_state_instruction)
-            if not func:
-                log_warn("Bad target play state.")
-                return
+        func()
 
-            func()
-        elif oneof ==  'volume':
-            mapping = {
-                VOLUME_UP: self.device.volume_up,
-                VOLUME_DOWN: self.device.volume_down,
-                VOLUME_MUTE: lambda: self.device.set_volume_muted(True),
-                VOLUME_SET: lambda: self.device.set_volume(media.volume.level /
-                                                           100.0)
-            }
-            func = mapping.get(media.volume.type)
-            if not func:
-                log_warn("Bad volume command.")
-                return
-            func()
+    def handle_volume_instruction(self, volume_instruction):
+        mapping = {
+            VOLUME_UP: self.device.volume_up,
+            VOLUME_DOWN: self.device.volume_down,
+            VOLUME_MUTE: lambda: self.device.set_volume_muted(True),
+        }
+        func = mapping.get(volume_instruction)
+        if not func:
+            log_warn("Bad volume command.")
+            return
+
+        func()
+
+    def handle_playlist_instruction(self, playlist_instruction):
+        instruction_type = playlist_instruction.WhichOneof('type')
+        if instruction_type == 'next_track':
+            self.device.media_controller.skip()
+        elif instruction_type == 'previous_track':
+            self.device.media_controller.rewind()
+        elif instruction_type == 'play_now':
+            self.device.media_controller.play_media(
+                playlist_instruction.play_now, "audio/mp3")
         else:
-            log_warn("Instruction handler not implemented.")
+            log_warn("Playlist instruction type not supported: " + str(instruction_type))
 
     def handle_set_device_state(self, msg, responder):
         if msg.volume_state > 0:
             self.device.set_volume(msg.volume_state / 100.0)
+        if msg.volume_instruction:
+            self.handle_volume_instruction(msg.volume_instruction)
+        if msg.HasField('media_instruction'):
+            self.handle_media_instruction(msg.media_instruction)
+        if msg.HasField('playlist_instruction'):
+            self.handle_playlist_instruction(msg.playlist_instruction)
 
 
 class CastDevicesController(DeviceHandlerBase):
